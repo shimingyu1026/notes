@@ -159,3 +159,81 @@ SV的仿真调度完全支持Verilog的仿真调度，同时又扩展出来支�
 ## 6. SV组件实现
 
 ### 激励发生器的驱动
+
+Stimulator（激励发生器）是生成激励的源。
+
+#### 激励驱动的方法
+
+以regs_ini_if相连接的stimulator ini_stim为例：
+
+```
+module stm_ini（
+input clk,
+input rstn,output[1:0]cmd,
+output[7:0]cmd_addr,
+output[31:0]cmd_data_w,
+input [31:0]cmd_data_r
+）;
+localparam IDLE=2＇b00;
+localparam RD =2＇b01;
+localparam WR =2＇b10;
+logic[1:0]v_cmd;
+logic[7:0]v_cmd_addr;
+logic[31:0]v_cmd_data_w;
+assign cmd=v_cmd;
+assign cmd_addr=v_cmd_addr;
+assign cmd_data_w=v_cmd_data_w;
+typedef struct{ //trans 数据类型定义
+bit[1:0]cmd;
+bit[7:0]cmd_addr;
+bit[31:0]cmd_data_w;bit[31:0]cmd_data_r;
+} trans;
+trans ts[3]; //trans固定数组声明和初始化
+task op_wr（trans t）; //写指令定义
+task op_rd（trans t）; //读指令定义
+task op_idle（）; //空闲指令定义
+task op_parse（trans t）; //指令类型解析
+...//指令分发即产生激励
+endmodule
+```
+
+stm_ini在内部声明了多个方法（methods），即op_wr、op_rd、op_idle和op_parse，且它们驱动硬件信号。需要先声明几个变量 v_cmd、v_cmd_addr、v_cmd_data_w，这是因为方法内部的非阻塞赋值只能引用logic类型或者reg类型，而无法直接对 stm_ini 的端口（wire 类型）赋值。
+
+方法op_wr有一个参数trans t，若未标明传递方向，则默认为输入端（input trans t）。在时钟的上升沿将变量t中的t.cmd、t.cmd_addr和t.cmd_data_w分别写入硬件信号中，最终触发一次写操作。
+
+```
+task op_wr（trans t）;
+@（posedge clk）;
+v_cmd <=t.cmd;
+v_cmd_addr <=t.cmd_addr;
+v_cmd_data_w <=t.cmd_data_w;
+endtask
+```
+
+这里要再声明一个方法 op_parse（），它可以根据参数的命令类型决断调用哪种指令操作方法。
+
+```
+task op_parse（trans t）;
+case（t.cmd）
+WR: op_wr（t）;
+RD: op_rd（t）;
+IDLE: op_idle（）;
+default: $error（＂Invalid CMD!＂）;
+endcase
+endtask
+```
+
+在stm_ini模块的最后，又声明了一个initial块来产生最终的激励：
+
+```
+initial begin: stmgen
+@（posedge rstn）; //等待复位释放
+foreach（ts[i]）begin //解析ts数组中每个成员，从ts[0]至ts[2]
+op_parse（ts[i]）; //调用解析方法
+end
+repeat（5）@（posedge clk）; //连续等待5个时钟上升沿
+$finish（）; //主动结束仿真
+end
+```
+
+#### 任务和函数
