@@ -65,7 +65,6 @@ endmodule
 
 ![1743084454484](image/SV/1743084454484.png)
 
-
 ```
 interface regs_cr_if;
 logic clk;
@@ -110,12 +109,14 @@ regs_cr_if的功能是提供时钟和复位信号，这里我们可以在regs_cr
 interface regs_cr_if;
 logic clk;
 logic rstn;
+
 initial begin
 clk <=0;
 forever begin
 #5ns clk <=!clk;
 end
 end
+
 initial begin
 #20ns;
 rstn <=1;
@@ -123,6 +124,7 @@ rstn <=1;
 rstn <=0;#40ns;
 rstn <=1;
 end
+
 endinterface: regs_cr_if
 ```
 
@@ -135,12 +137,15 @@ modport dut（
 input　cmd,cmd_addr,cmd_data_w,
 output cmd_data_r
 ）;
+
 modport stim（
 input　cmd_data_r,
 output cmd,cmd_addr,cmd_data_w
 ）;
+
 modport mon（input cmd,cmd_addr,cmd_data_w,cmd_data_r
 ）;
+
 endinterface: regs_ini_if
 ```
 
@@ -158,11 +163,11 @@ SV的仿真调度完全支持Verilog的仿真调度，同时又扩展出来支�
 
 ## 6. SV组件实现
 
-### 激励发生器的驱动
+### 6.1 激励发生器的驱动
 
 Stimulator（激励发生器）是生成激励的源。
 
-#### 激励驱动的方法
+#### 6.1.1 激励驱动的方法
 
 以regs_ini_if相连接的stimulator ini_stim为例：
 
@@ -183,11 +188,13 @@ logic[31:0]v_cmd_data_w;
 assign cmd=v_cmd;
 assign cmd_addr=v_cmd_addr;
 assign cmd_data_w=v_cmd_data_w;
+
 typedef struct{ //trans 数据类型定义
 bit[1:0]cmd;
 bit[7:0]cmd_addr;
 bit[31:0]cmd_data_w;bit[31:0]cmd_data_r;
 } trans;
+
 trans ts[3]; //trans固定数组声明和初始化
 task op_wr（trans t）; //写指令定义
 task op_rd（trans t）; //读指令定义
@@ -236,4 +243,138 @@ $finish（）; //主动结束仿真
 end
 ```
 
-#### 任务和函数
+#### 6.1.2 任务和函数
+
+ask与function的参数列表中均可以声明多个input（输入）、output（输出）、inout（输入输出）和ref（引用）类型。ref 类似于软件中的指针，在调用方式时不会有任何复制行为，而是直接引用或修改外部传入的数据对象。
+
+#### 6.1.3 数据生命周期
+
+在SV中，我们将数据的生命周期分为两类：
+
+* automatic（动态）；
+* static（静态）。
+
+static 在仿真过程中的任何时刻都可以被共享，且不会被销毁。而automatic变量则与软件的局部变量一样，在它的作用域生命结束时被销毁回收存储空间：
+
+```
+function automatic int auto_cnt（input a）;
+int cnt=0;
+cnt+=a;
+return cnt;
+endfunction
+
+function static int static_cnt（input a）;
+static int cnt=0;
+cnt+=a;
+return cnt;
+endfunction
+
+function int def_cnt（input a）;
+static int cnt=0;
+cnt+=a;
+return cnt;
+endfunction
+
+initial begin
+$display（＂@1 auto_cnt=%0d＂,auto_cnt（1））;
+$display（＂@2 auto_cnt=%0d＂,auto_cnt（1））;
+$display（＂@1 static_cnt=%0d＂,static_cnt（1））;
+$display（＂@2 static_cnt=%0d＂,static_cnt（1））;
+$display（＂@1 def_cnt=%0d＂,def_cnt（1））;
+$display（＂@2 def_cnt=%0d＂,def_cnt（1））;
+end
+```
+
+输出结果为：
+
+```
+# @1 auto_cnt=1
+# @2 auto_cnt=1
+# @1 static_cnt=1
+# @2 static_cnt=2
+# @1 def_cnt=1
+# @2 def_cnt=2
+```
+
+#### 6.1.4 通过接口直接驱动
+
+可以通过virtual interface（虚接口）在stimulator内部直接做采样或者驱动。
+
+```
+module stm_ini;
+virtual interface regs_ini_if vif;
+trans ts[]; //trans 动态数组声明
+
+initial begin: stmgen //指令分发即产生激励
+wait（vif !=null）;
+@（posedge vif.rstn）;
+foreach（ts[i]）begin
+op_parse（ts[i]）;
+end
+repeat（5）@（posedge vif.clk）;
+$finish（）;
+end
+endmodule
+
+module tb;
+//例化接口
+regs_cr_if　crif（）;
+regs_ini_if iniif（）;
+ctrl_regs dut（...）;
+stm_ini ini（）;
+initial begin: arrini
+ini.ts=new[3];
+ini.ts[0].cmd　　　　=WR;
+ini.ts[0].cmd_addr　　=0;
+ini.ts[0].cmd_data_w　=	32＇hFFFF_FFFF;
+ini.ts[1].cmd　　　　=RD;
+ini.ts[1].cmd_addr　　=0;
+ini.ts[2].cmd　　　　=IDLE;
+end
+initial begin: setif //传递接口
+ini.vif=iniif;
+end
+endmodule
+```
+
+动态数组的使用和外部初始化使得TB将stimulator的驱动功能和test vector（测试向量）生成这两个任务清晰地剥离开，尽量保证 stm_ini 只完成驱动功能。
+
+### 6.2 激励发生器的封装（Class）
+
+将之前定义的module stm_ini和struct trans改造为class stm_ini和class trans
+
+```
+class trans;
+bit[1:0]cmd;
+bit[7:0]cmd_addr;
+bit[31:0]cmd_data_w;
+bit[31:0]cmd_data_r;
+endclass
+
+class stm_ini;
+virtual interface regs_ini_if vif;
+trans ts[];
+task op_wr（trans t）;
+task op_rd（trans t）;
+task op_idle（）;
+task op_parse（trans t）;
+
+task stmgen（）;
+wait（vif !=null）;
+@（posedge vif.rstn）;
+foreach（ts[i]）begin
+op_parse（ts[i]）;
+end
+endtask
+endclass
+```
+
+class trans定义了内部的成员，而class stm_ini则定义了成员变量和成员方法。类内部的方法必须是task或function，不能使用module中的硬件过程块always或initial。
+
+我们将之前的module tests拆分为三个类，即class basic_test、class test_wr和class_rd。
+
+![1743132107774](image/SV/1743132107774.png)
+
+#### 6.2.1 虚方法
+
+![1743134410929](image/SV/1743134410929.png)
