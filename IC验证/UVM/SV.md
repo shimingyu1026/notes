@@ -476,3 +476,131 @@ endclass
 * $urandom_range（int unsigned MAX,int unsigned MIN=0）：在指定范围内产生无符号随机数。
 
 ### 6.4 监测器的采样 monitor
+
+monitor的功能核心就是从interface做数据采样（sampling）和打包（packaging）送给checker。
+
+#### 6.4.1 Interface clocking
+
+一个典型的clocking定义：
+
+```
+clocking bus @（posedge clock1）;
+default input #10ns output #2ns;
+input data,ready,enable=top.mem1.enable;
+output negedge ack;
+input #1step addr;//上一个时钟周期的数据
+endclocking
+```
+
+monitor 采样
+
+event用法：
+
+```
+class car;
+event e_start;
+
+task launch（）;
+-> e_start;
+$display（＂car is launched＂）;
+endtask
+
+task move（）;
+wait（e_start.triggered）;
+$display（＂car is moving＂）;
+endtasktask drive（）;
+fork
+this.launch（）;
+this.move（）;
+join
+endtask
+
+endclass
+```
+
+#### 资源共享/通信
+
+可以通过semaphore（旗语）解决资源共享这个问题。
+
+使用mailbox多线程间通过邮箱传递数据：
+
+```
+// 定义事务类型
+class transaction;
+  int id;
+  int data;
+  function new(int id, int data);
+    this.id = id;
+    this.data = data;
+  endfunction
+endclass
+module mailbox_example;
+  // 声明一个无容量限制的mailbox（可存储任意数量事务）
+  mailbox #(transaction) mbx = new();  // 生产者任务：生成事务并发送到mailbox
+  task producer();
+    transaction tr;
+    for (int i = 0; i < 5; i++) begin
+      tr = new(i, $urandom_range(100));  // 创建事务对象
+      display("[Producer] @%0t: Sent transaction(id=%0d, data=%0d)", display("[Producer]@time, tr.id, tr.data);
+      mbx.put(tr);                       // 将事务放入mailbox
+      #10;                               // 模拟处理延迟
+    end
+    display("[Producer] @%0t: All transactions sent.", display("[Producer]@time);
+  endtask  // 消费者任务：从mailbox接收事务并处理
+  task consumer();
+    transaction tr;
+    forever begin
+      mbx.get(tr);  // 阻塞等待直到mailbox中有数据
+      display("[Consumer] @%0t: Received transaction(id=%0d, data=%0d)", display("[Consumer]@time, tr.id, tr.data);
+      #20;          // 模拟处理延迟
+    end
+  endtask  // 主测试逻辑
+  initial begin
+    fork
+      producer();  // 启动生产者线程
+      consumer();  // 启动消费者线程
+    join_none
+    #200;          // 等待所有操作完成
+    $finish;
+  end
+endmodule
+```
+
+仿真输出为：
+
+```shell
+[Producer] @0: Sent transaction(id=0, data=83)
+[Consumer] @0: Received transaction(id=0, data=83)
+[Producer] @10: Sent transaction(id=1, data=11)
+[Producer] @20: Sent transaction(id=2, data=97)
+[Consumer] @20: Received transaction(id=1, data=11)
+[Producer] @30: Sent transaction(id=3, data=42)
+[Producer] @40: Sent transaction(id=4, data=75)
+[Consumer] @40: Received transaction(id=2, data=97)
+[Producer] @40: All transactions sent.
+[Consumer] @60: Received transaction(id=3, data=42)
+[Consumer] @80: Received transaction(id=4, data=75)
+```
+
+* event：最小信息量的触发，即单一的通知功能。可以用来做事件的触发，也可以组合多个event做线程之间的同步。
+* semaphore：共享资源的安全卫士。多个线程访问某一公共资源时可以使用这个要素。
+* mailbox：精小的SV原生FIFO。在线程之间做数据通信或内部数据缓存时可以考虑使用此元素
+
+### 6.5 比较器和参考模型
+
+#### 6.5.1 异常检查
+
+主要检查复位
+
+#### 6.5.2 常规检查
+
+要求观察DUT的三个方面：配置情况、输入数据、输出数据。
+
+1. **拆分检查：**
+
+   将DUT检查的功能点有机剥离，并对每个功能点做独立的检查。
+2. **整体检查：**
+
+   将DUT的配置和接口数据作为参考模型的输入，参考模型会模拟设计功能并输出期望数据，再将其与监测的DUT输出数据做比较。
+
+TODO
