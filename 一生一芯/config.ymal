@@ -1,0 +1,10 @@
+index:
+    title: Index
+slides:
+    theme: dracula
+    highlight_theme: monokai
+revealjs:
+    history: true
+    slideNumber: c/t
+    height: 1080
+    width: 1920
