@@ -48,3 +48,27 @@
 ```
 
 注册所有字段，可以直接调用transaction的copy，compare，print函数，以及driver中的pack_bytes方法，monitor的unpack_bytes方法。
+
+## sequence
+
+sequence用于产生激励，使得driver只负责驱动transaction。sequencer继承自uvm_sequencer，是一个参数化的类，参数是transaction的类型。sequencer和driver关系密切，需要加入agent中
+
+sequence是uvm_object，使用uvm_object_utils注册。sequence启动之后会自动执行body任务的代码。**uvm_do**宏：创建一个transaction实例、随机化、最终送给sequenser。
+
+在agent中使用宏将driver和sequencer连接起来：`drv.seq_item_port.connect(sqr.seq_item_export);`。然后在driver的main_phase中使用 `seq_item_port.get_next_item(req);`请求下一个transaction。使用 `seq_item_port.item_done();`告知sequencer。
+
+使用default_sequence启动sequence。在某个component中（如env）的build_phase中使用：
+
+```
+uvm_config_db#(uvm_object_wrapper)::set(this,"i_agt.sqr.main_phase","default_sequence",my_sequence::type_id::get());
+```
+
+uvm_config_db一般都是成对出现的，而这里不需要在sequencer中写get代码。此后在sequence中使用starting_phase启动和撤销objection
+
+## 测试用例构造
+
+真正的测试用例是基于base_test派生的类，而base_test继承自uvm_test。在base_test里面实例化env，并设置sequenser的default_sequence。
+
+在顶层模块中可以不加参数run_test（）；UVM会使用UVM_TESTNAME寻找测试用例的名字。
+
+![图片描述](image/UVM/UVM_tree.jpg)
